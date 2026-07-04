@@ -24,3 +24,5 @@ typedef struct
     int score_p1;
     int score_p2;
 } PacoteEstado;
+
+typedef enum { TELA_MENU, TELA_AGUARDANDO, TELA_JOGO } EstadoTela;
