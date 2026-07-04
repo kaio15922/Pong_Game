@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include <stdlib.h>
+//#include <stdlib.h>
 #include <winsock2.h> // A biblioteca que o Windows exige para mexer com rede
 #include "server.h"
 
@@ -85,72 +85,104 @@ int main()
     int j1_conectado = 0, j2_conectado = 0;
 
     // loop Principal do Servidor
-    while (1) 
-    {
-        // tentamos ler um pacote. Como o socket é não-bloqueante, se não tiver pacote, ele passa direto
-        int bytes_recebidos = recvfrom(server_socket, (char*)&input_recebido, sizeof(PacoteInput), 0, (struct sockaddr *)&client_addr, &client_addr_len);
+    while (1) {
+        
+        // cria uma estrutura local e temporária para o cliente deste frame específico.
+        // isso impede que o endereço do Jogador 1 e do Jogador 2 se misturem na rede.
+        struct sockaddr_in de_onde_veio_o_pacote;
+        int tamanho_endereco = sizeof(de_onde_veio_o_pacote);
 
-        if (bytes_recebidos > 0) 
+        // ESCUTAR A REDE (COM VALIDAÇÃO DE VAGA)
+        while (recvfrom(server_socket, (char*)&input_recebido, sizeof(PacoteInput), 0, (struct sockaddr *)&de_onde_veio_o_pacote, &tamanho_endereco) > 0) 
         {
-            // se recebemos um pacote, checamos quem enviou para cadastrar os IPs dos jogadores
+            
             if (input_recebido.id_jogador == 1) 
             {
-                addr_jogador1 = client_addr;
-                j1_conectado = 1;
-                
-                // aplica o movimento do Jogador 1 de acordo com as teclas que ele apertou
-                if (input_recebido.tecla_W && p1_y > 0) p1_y -= p_velocidade;
-                if (input_recebido.tecla_S && p1_y < SCREEN_HEIGHT - p_altura) p1_y += p_velocidade;
+                // se a vaga do P1 estiver vazia, OU se quem mandou o pacote for o PRÓPRIO P1 que já estava jogando
+                if (!j1_conectado || (addr_jogador1.sin_addr.s_addr == de_onde_veio_o_pacote.sin_addr.s_addr && addr_jogador1.sin_port == de_onde_veio_o_pacote.sin_port)) 
+                {
+                    addr_jogador1 = de_onde_veio_o_pacote;
+                    j1_conectado = 1;
+                    
+                    if (input_recebido.tecla_W && p1_y > 0) p1_y -= p_velocidade;
+                    if (input_recebido.tecla_S && p1_y < SCREEN_HEIGHT - p_altura) p1_y += p_velocidade;
+                } 
+                else 
+                {
+                    // se o IP/Porta for diferente, significa que outra pessoa tentou roubar a vaga do P1.
+                    // o servidor simplesmente ignora o input dessa pessoa e não atualiza o comando.
+                    printf("[AVISO] Tentativa de dupla conexao no Jogador 1 rejeitada.\n");
+                }
             } 
             else if (input_recebido.id_jogador == 2) 
             {
-                addr_jogador2 = client_addr;
-                j2_conectado = 1;
-                
-                // aplica o movimento do Jogador 2
-                if (input_recebido.tecla_W && p2_y > 0) p2_y -= p_velocidade;
-                if (input_recebido.tecla_S && p2_y < SCREEN_HEIGHT - p_altura) p2_y += p_velocidade;
+                // mesma checagem para o Jogador 2
+                if (!j2_conectado || (addr_jogador2.sin_addr.s_addr == de_onde_veio_o_pacote.sin_addr.s_addr && addr_jogador2.sin_port == de_onde_veio_o_pacote.sin_port)) 
+                {
+                    addr_jogador2 = de_onde_veio_o_pacote;
+                    j2_conectado = 1;
+                    
+                    if (input_recebido.tecla_W && p2_y > 0) p2_y -= p_velocidade;
+                    if (input_recebido.tecla_S && p2_y < SCREEN_HEIGHT - p_altura) p2_y += p_velocidade;
+                } 
+                else
+                {
+                    printf("[AVISO] Tentativa de dupla conexao no Jogador 2 rejeitada.\n");
+                }
             }
         }
 
-        b_x += b_velo_x;
-        b_y += b_velo_y;
-
-        // colisão com teto e chão
-        if (b_y - b_raio <= 0 || b_y + b_raio >= SCREEN_HEIGHT) 
+        // FÍSICA SÓ FUNCIONA COM OS DOIS CONECTADOS
+        if (j1_conectado && j2_conectado) 
         {
-            b_velo_y *= -1;
-        }
+            // a bola só se move se os dois players já tiverem entrado no jogo
+            b_x += b_velo_x;
+            b_y += b_velo_y;
 
-        // colisão com a paleta 1 (Esquerda)
-        if (b_x - b_raio <= 20 + p_largura && b_y >= p1_y && b_y <= p1_y + p_altura) 
-        {
-            b_velo_x *= -1.1;
-            b_x = 20 + p_largura + b_raio;
-        }
+            // colisão com teto e chão
+            if (b_y - b_raio <= 0 || b_y + b_raio >= SCREEN_HEIGHT) 
+            {
+                b_velo_y *= -1;
+            }
 
-        // colisão com a paleta 2 (Direita)
-        if (b_x + b_raio >= (SCREEN_WIDTH - 20 - p_largura) && b_y >= p2_y && b_y <= p2_y + p_altura) 
-        {
-            b_velo_x *= -1.1;
-            b_x = (SCREEN_WIDTH - 20 - p_largura) - b_raio;
-        }
+            // colisão com a paleta 1 (Esquerda)
+            if (b_x - b_raio <= 20 + p_largura && b_y >= p1_y && b_y <= p1_y + p_altura) 
+            {
+                b_velo_x *= -1.1;
+                b_x = 20 + p_largura + b_raio;
+            }
 
-        // sistema de pontuação e reset da bola no meio
-        if (b_x < 0) 
-        {
-            scoreP2++;
-            b_x = (float)SCREEN_WIDTH / 2; b_y = (float)SCREEN_HEIGHT / 2;
-            b_velo_x *= -1;
+            // colisão com a paleta 2 (Direita)
+            if (b_x + b_raio >= (SCREEN_WIDTH - 20 - p_largura) && b_y >= p2_y && b_y <= p2_y + p_altura) 
+            {
+                b_velo_x *= -1.1;
+                b_x = (SCREEN_WIDTH - 20 - p_largura) - b_raio;
+            }
+
+            // sistema de pontuação e reset central
+            if (b_x < 0) 
+            {
+                scoreP2++;
+                b_x = (float)SCREEN_WIDTH / 2; b_y = (float)SCREEN_HEIGHT / 2;
+                b_velo_x *= -1;
+            } 
+            else if (b_x > SCREEN_WIDTH) 
+            {
+                scoreP1++;
+                b_x = (float)SCREEN_WIDTH / 2; b_y = (float)SCREEN_HEIGHT / 2;
+                b_velo_x *= -1;
+            }
         } 
-        else if (b_x > SCREEN_WIDTH) 
+        else 
         {
-            scoreP1++;
-            b_x = (float)SCREEN_WIDTH / 2; b_y = (float)SCREEN_HEIGHT / 2;
-            b_velo_x *= -1;
+            // enquanto os dois não entrarem, força o placar em zero e a bola parada no meio
+            scoreP1 = 0;
+            scoreP2 = 0;
+            b_x = (float)SCREEN_WIDTH / 2;
+            b_y = (float)SCREEN_HEIGHT / 2;
         }
 
-        // preencher a struct de envio com a "fotografia" atual das posições
+        // REPLICAR O ESTADO DO JOGO
         estado_envio.bola_x = b_x;
         estado_envio.bola_y = b_y;
         estado_envio.jogador1_y = p1_y;
@@ -158,19 +190,16 @@ int main()
         estado_envio.score_p1 = scoreP1;
         estado_envio.score_p2 = scoreP2;
 
-        // se o Jogador 1 já mandou pacotes e está cadastrado, envia o estado atualizado para o IP dele
         if (j1_conectado) 
         {
             sendto(server_socket, (char*)&estado_envio, sizeof(PacoteEstado), 0, (struct sockaddr *)&addr_jogador1, sizeof(addr_jogador1));
         }
-        // se o Jogador 2 estiver conectado, envia para ele também
         if (j2_conectado) 
         {
             sendto(server_socket, (char*)&estado_envio, sizeof(PacoteEstado), 0, (struct sockaddr *)&addr_jogador2, sizeof(addr_jogador2));
         }
 
-        // controla o Tick Rate do servidor - 16 milissegundos para rodar a mais ou menos 60Hz
-        Sleep(16);
+        Sleep(1); 
     }
 
     // desliga e solta tudo
