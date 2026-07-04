@@ -23,6 +23,7 @@ typedef struct
     float jogador2_y;
     int score_p1;
     int score_p2;
+    unsigned int sequencia;
 } PacoteEstado;
 
 typedef enum { TELA_MENU, TELA_AGUARDANDO, TELA_JOGO } EstadoTela;

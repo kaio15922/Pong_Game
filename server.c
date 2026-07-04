@@ -12,6 +12,7 @@ int main()
     SOCKET server_socket;    // o "id" do socket na placa de rede
     struct sockaddr_in server_addr, client_addr; // structs para guardar o IP e a Porta do servidor e do cliente
     int client_addr_len = sizeof(client_addr);   // tamanho do struct do cliente (o Windows pede isso)
+    unsigned int sequencia_servidor = 0;
 
     // LIGAR A REDE DO WINDOWS
     printf("Ligando a rede do Windows...\n");
@@ -95,6 +96,10 @@ int main()
         // ESCUTAR A REDE (COM VALIDAÇÃO DE VAGA)
         while (recvfrom(server_socket, (char*)&input_recebido, sizeof(PacoteInput), 0, (struct sockaddr *)&de_onde_veio_o_pacote, &tamanho_endereco) > 0) 
         {
+
+            // DESCRIPTOGRAFIA = Faz o XOR com a mesma chave para descriptografar os comandos
+            int tecla_W_real = input_recebido.tecla_W ^ 0x5A;
+            int tecla_S_real = input_recebido.tecla_S ^ 0x5A;
             
             if (input_recebido.id_jogador == 1) 
             {
@@ -104,8 +109,8 @@ int main()
                     addr_jogador1 = de_onde_veio_o_pacote;
                     j1_conectado = 1;
                     
-                    if (input_recebido.tecla_W && p1_y > 0) p1_y -= p_velocidade;
-                    if (input_recebido.tecla_S && p1_y < SCREEN_HEIGHT - p_altura) p1_y += p_velocidade;
+                    if (tecla_W_real && p1_y > 0) p1_y -= p_velocidade;
+                    if (tecla_S_real && p1_y < SCREEN_HEIGHT - p_altura) p1_y += p_velocidade;
                 } 
                 else 
                 {
@@ -122,8 +127,8 @@ int main()
                     addr_jogador2 = de_onde_veio_o_pacote;
                     j2_conectado = 1;
                     
-                    if (input_recebido.tecla_W && p2_y > 0) p2_y -= p_velocidade;
-                    if (input_recebido.tecla_S && p2_y < SCREEN_HEIGHT - p_altura) p2_y += p_velocidade;
+                    if (tecla_W_real && p2_y > 0) p2_y -= p_velocidade;
+                    if (tecla_S_real && p2_y < SCREEN_HEIGHT - p_altura) p2_y += p_velocidade;
                 } 
                 else
                 {
@@ -189,6 +194,9 @@ int main()
         estado_envio.jogador2_y = p2_y;
         estado_envio.score_p1 = scoreP1;
         estado_envio.score_p2 = scoreP2;
+
+        estado_envio.sequencia = sequencia_servidor;
+        sequencia_servidor++;
 
         if (j1_conectado) 
         {
