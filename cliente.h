@@ -6,7 +6,7 @@
 #define NOUSER            // Exclui funções de usuário do Windows (como ShowCursor)
 
 #define SERVER_PORT 8888
-#define SERVER_IP "192.168.0.5" // "127.0.0.1" significa "meu próprio PC" (Localhost)
+#define SERVER_IP "127.0.0.1" // "127.0.0.1" significa "meu próprio PC" (Localhost)
 
 
 typedef struct 
