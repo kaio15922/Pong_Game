@@ -1,5 +1,5 @@
 #include <stdio.h>
-//#include <stdlib.h>
+#include <string.h>   // Mudança-Inicio: adicionado para tratamento de strings (strcmp) // Mudança-Fim
 #include <winsock2.h> // A biblioteca que o Windows exige para mexer com rede
 #include "server.h"
 
@@ -15,9 +15,7 @@ int main()
     unsigned int sequencia_servidor = 0;
 
     // LIGAR A REDE DO WINDOWS
-    printf("Ligando a rede do Windows...\n");
-    // windows exige que dê esse WSAStartup antes de qualquer coisa de rede.
-    // MAKEWORD(2,2) só diz que estamos usando a versão 2.2 da biblioteca deles.
+    printf("Ligando a rede do Windows..\n");
     if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) 
     {
         printf("Moio pra ligar a rede. Erro: %d\n", WSAGetLastError());
@@ -25,44 +23,31 @@ int main()
     }
 
     // CRIAR O CANAL UDP (O SOCKET)
-    // criando o socket
-    // AF_INET = Vamos usar IPv4
-    // SOCK_DGRAM = definindo que o protocolo de transporte será UDP.
     if ((server_socket = socket(AF_INET, SOCK_DGRAM, 0)) == INVALID_SOCKET) 
     {
         printf("Moio pra criar o canal UDP. Erro: %d\n", WSAGetLastError());
-        WSACleanup(); // desliga a rede do Windows antes de fechar o programa
+        WSACleanup(); 
         return 1;
     }
     printf("Canal UDP criado com sucesso.\n");
 
     // CONFIGURAR O ENDEREÇO DO SERVIDOR
-    server_addr.sin_family = AF_INET; // fala que estamos no IPv4
-    
-    // INADDR_ANY = aceitar pacotes vindo de qualquer IP pro pc
-    // (Seja jogando no localhost, pelo Wi-Fi ou pelo cabo de rede).
-    server_addr.sin_addr.s_addr = INADDR_ANY; 
-    
-    // htons converte o número da porta 8888 para o formato que as placas de rede entendam.
+    server_addr.sin_family = AF_INET; 
+    server_addr.sin_addr.s_addr = INADDR_ANY; // Escuta tanto conexões diretas quanto Broadcasts locais
     server_addr.sin_port = htons(PORT);       
 
     // RESERVAR A PORTA NO SISTEMA (BIND)
-    /*
-    o bind serve pra dizer pro windows q a partir de agr, a porta 8888 pertence a ele e que tudo que for pacote e chegar
-    via udp, manda pro codigo
-    */
     if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) 
     {
         printf("Erro ao reservar a porta 8888. Erro: %d\n", WSAGetLastError());
-        closesocket(server_socket); // fecha o canal para não travar a porta no PC
+        closesocket(server_socket); 
         WSACleanup();
         return 1;
     }
     printf("Porta reservada! Servidor escutando na porta %d...\n", PORT);
 
     // ATIVANDO O MODO NÃO-BLOQUEANTE
-    unsigned long modo_nao_bloqueante = 1; // 1 ativa, 0 desativa
-    // ioctlsocket avisa o Windows que este socket não deve travar o código esperando pacotes
+    unsigned long modo_nao_bloqueante = 1; 
     ioctlsocket(server_socket, FIONBIO, &modo_nao_bloqueante);
 
     // VARIÁVEIS DA FÍSICA DO PONG
@@ -88,99 +73,110 @@ int main()
     // loop Principal do Servidor
     while (1) {
         
-        // cria uma estrutura local e temporária para o cliente deste frame específico.
-        // isso impede que o endereço do Jogador 1 e do Jogador 2 se misturem na rede.
         struct sockaddr_in de_onde_veio_o_pacote;
         int tamanho_endereco = sizeof(de_onde_veio_o_pacote);
 
         // ESCUTAR A REDE (COM VALIDAÇÃO DE VAGA)
-        while (recvfrom(server_socket, (char*)&input_recebido, sizeof(PacoteInput), 0, (struct sockaddr *)&de_onde_veio_o_pacote, &tamanho_endereco) > 0) 
+        // Mudança-Inicio: Criamos um buffer maior (256 bytes) para caber tanto strings quanto as structs do jogo
+        char buffer_rede[256]; 
+        int bytes_recebidos;
+        
+        // Agora lemos para dentro do buffer_rede
+        while ((bytes_recebidos = recvfrom(server_socket, buffer_rede, sizeof(buffer_rede), 0, (struct sockaddr *)&de_onde_veio_o_pacote, &tamanho_endereco)) > 0) 
         {
+            // 1. Verifica se o pacote recebido é a string de Broadcast LAN
+            if (bytes_recebidos >= 14 && strncmp(buffer_rede, "PONG_DISCOVERY", 14) == 0)
+            {
+                char sinal_resposta[] = "PONG_SERVER_ALIVE";
+                // Responde diretamente para a máquina do cliente que está escutando
+                sendto(server_socket, sinal_resposta, strlen(sinal_resposta), 0, (struct sockaddr *)&de_onde_veio_o_pacote, tamanho_endereco);
+                continue; // Consome o pacote e ignora o resto da física
+            }
 
-            // DESCRIPTOGRAFIA = Faz o XOR com a mesma chave para descriptografar os comandos
-            int tecla_W_real = input_recebido.tecla_W ^ 0x5A;
-            int tecla_S_real = input_recebido.tecla_S ^ 0x5A;
-            
-            if (input_recebido.id_jogador == 1) 
+            // 2. Se não for broadcast, verifica se tem o tamanho exato do nosso PacoteInput
+            if (bytes_recebidos == sizeof(PacoteInput))
             {
-                // se a vaga do P1 estiver vazia, OU se quem mandou o pacote for o PRÓPRIO P1 que já estava jogando
-                if (!j1_conectado || (addr_jogador1.sin_addr.s_addr == de_onde_veio_o_pacote.sin_addr.s_addr && addr_jogador1.sin_port == de_onde_veio_o_pacote.sin_port)) 
+                // Converte (cast) os bytes puros do buffer de volta para a estrutura do jogo
+                PacoteInput* input_recebido = (PacoteInput*)buffer_rede;
+
+                // Desocultação = Faz o XOR com a mesma chave para descriptografar os comandos
+                int tecla_W_real = input_recebido->tecla_W ^ 0x5A;
+                int tecla_S_real = input_recebido->tecla_S ^ 0x5A;
+                
+                if (input_recebido->id_jogador == 1) 
                 {
-                    addr_jogador1 = de_onde_veio_o_pacote;
-                    j1_conectado = 1;
-                    
-                    if (tecla_W_real && p1_y > 0) p1_y -= p_velocidade;
-                    if (tecla_S_real && p1_y < SCREEN_HEIGHT - p_altura) p1_y += p_velocidade;
+                    if (!j1_conectado || (addr_jogador1.sin_addr.s_addr == de_onde_veio_o_pacote.sin_addr.s_addr && addr_jogador1.sin_port == de_onde_veio_o_pacote.sin_port)) 
+                    {
+                        addr_jogador1 = de_onde_veio_o_pacote;
+                        j1_conectado = 1;
+                        
+                        if (tecla_W_real && p1_y > 0) p1_y -= p_velocidade;
+                        if (tecla_S_real && p1_y < SCREEN_HEIGHT - p_altura) p1_y += p_velocidade;
+                    } 
+                    else 
+                    {
+                        printf("[AVISO] Tentativa de dupla conexao no Jogador 1 rejeitada.\n");
+                    }
                 } 
-                else 
+                else if (input_recebido->id_jogador == 2) 
                 {
-                    // se o IP/Porta for diferente, significa que outra pessoa tentou roubar a vaga do P1.
-                    // o servidor simplesmente ignora o input dessa pessoa e não atualiza o comando.
-                    printf("[AVISO] Tentativa de dupla conexao no Jogador 1 rejeitada.\n");
-                }
-            } 
-            else if (input_recebido.id_jogador == 2) 
-            {
-                // mesma checagem para o Jogador 2
-                if (!j2_conectado || (addr_jogador2.sin_addr.s_addr == de_onde_veio_o_pacote.sin_addr.s_addr && addr_jogador2.sin_port == de_onde_veio_o_pacote.sin_port)) 
-                {
-                    addr_jogador2 = de_onde_veio_o_pacote;
-                    j2_conectado = 1;
-                    
-                    if (tecla_W_real && p2_y > 0) p2_y -= p_velocidade;
-                    if (tecla_S_real && p2_y < SCREEN_HEIGHT - p_altura) p2_y += p_velocidade;
-                } 
-                else
-                {
-                    printf("[AVISO] Tentativa de dupla conexao no Jogador 2 rejeitada.\n");
+                    if (!j2_conectado || (addr_jogador2.sin_addr.s_addr == de_onde_veio_o_pacote.sin_addr.s_addr && addr_jogador2.sin_port == de_onde_veio_o_pacote.sin_port)) 
+                    {
+                        addr_jogador2 = de_onde_veio_o_pacote;
+                        j2_conectado = 1;
+                        
+                        if (tecla_W_real && p2_y > 0) p2_y -= p_velocidade;
+                        if (tecla_S_real && p2_y < SCREEN_HEIGHT - p_altura) p2_y += p_velocidade;
+                    } 
+                    else
+                    {
+                        printf("[AVISO] Tentativa de dupla conexao no Jogador 2 rejeitada.\n");
+                    }
                 }
             }
         }
-
+        // Mudança-Fim
+        
         // FÍSICA SÓ FUNCIONA COM OS DOIS CONECTADOS
         if (j1_conectado && j2_conectado) 
         {
-            // a bola só se move se os dois players já tiverem entrado no jogo
             b_x += b_velo_x;
             b_y += b_velo_y;
 
-            // colisão com teto e chão
             if (b_y - b_raio <= 0 || b_y + b_raio >= SCREEN_HEIGHT) 
             {
                 b_velo_y *= -1;
             }
 
-            // colisão com a paleta 1 (Esquerda)
             if (b_x - b_raio <= 20 + p_largura && b_y >= p1_y && b_y <= p1_y + p_altura) 
             {
                 b_velo_x *= -1.1;
                 b_x = 20 + p_largura + b_raio;
             }
 
-            // colisão com a paleta 2 (Direita)
             if (b_x + b_raio >= (SCREEN_WIDTH - 20 - p_largura) && b_y >= p2_y && b_y <= p2_y + p_altura) 
             {
                 b_velo_x *= -1.1;
                 b_x = (SCREEN_WIDTH - 20 - p_largura) - b_raio;
             }
 
-            // sistema de pontuação e reset central
             if (b_x < 0) 
             {
                 scoreP2++;
                 b_x = (float)SCREEN_WIDTH / 2; b_y = (float)SCREEN_HEIGHT / 2;
+                b_velo_x = 4.0f;
                 b_velo_x *= -1;
             } 
             else if (b_x > SCREEN_WIDTH) 
             {
                 scoreP1++;
                 b_x = (float)SCREEN_WIDTH / 2; b_y = (float)SCREEN_HEIGHT / 2;
+                b_velo_x = 4.0f;
                 b_velo_x *= -1;
             }
         } 
         else 
         {
-            // enquanto os dois não entrarem, força o placar em zero e a bola parada no meio
             scoreP1 = 0;
             scoreP2 = 0;
             b_x = (float)SCREEN_WIDTH / 2;
@@ -210,9 +206,8 @@ int main()
         Sleep(1); 
     }
 
-    // desliga e solta tudo
     printf("Fechando o servidor...\n");
-    closesocket(server_socket); // libera a porta 8888 para outros programas poderem usar
-    WSACleanup();               // desliga a biblioteca de rede do Windows
+    closesocket(server_socket); 
+    WSACleanup();              
     return 0;
 }

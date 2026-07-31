@@ -5,7 +5,7 @@
 #define SCREEN_HEIGHT 450
 
 // struct que o cliente envia para o servidor
-typedef struct 
+typedef struct __attribute__((packed))
 {
     int id_jogador;    // 1 para o jogador da esquerda, 2 para o da direita
     int tecla_W;       // 1 se estiver apertando W, 0 se solto
@@ -13,7 +13,7 @@ typedef struct
 } PacoteInput;
 
 // struct que o servidor devolve para os clientes
-typedef struct 
+typedef struct __attribute__((packed))
 {
     float bola_x, bola_y;
     float jogador1_y;

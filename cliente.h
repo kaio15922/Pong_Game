@@ -6,17 +6,17 @@
 #define NOUSER            // Exclui funções de usuário do Windows (como ShowCursor)
 
 #define SERVER_PORT 8888
-#define SERVER_IP "127.0.0.1" // "127.0.0.1" significa "meu próprio PC" (Localhost)
+#define SERVER_IP "127.0.0.1" // "127.0.0.1" localhost
 
 
-typedef struct 
+typedef struct __attribute__((packed))
 {
     int id_jogador;
     int tecla_W;
     int tecla_S;
 } PacoteInput;
 
-typedef struct 
+typedef struct __attribute__((packed))
 {
     float bola_x, bola_y;
     float jogador1_y;
@@ -26,4 +26,4 @@ typedef struct
     unsigned int sequencia;
 } PacoteEstado;
 
-typedef enum { TELA_MENU, TELA_AGUARDANDO, TELA_JOGO } EstadoTela;
+typedef enum { TELA_MENU, TELA_AGUARDANDO, TELA_JOGO, TELA_MENU_IP} EstadoTela;

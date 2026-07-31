@@ -4,8 +4,10 @@
 
 #include "cliente.h"
 #include <winsock2.h>     // redes do Windows sempre primeiro
+#include <ws2tcpip.h>
 #include <raylib.h>       // gráficos do jogo
 #include <stdio.h>
+#include <string.h>       // Mudança-Inicio: adicionado para operações de string (strcmp, etc.) // Mudança-Fim
 
 // garante que o compilador sabe onde achar a biblioteca de rede
 #pragma comment(lib, "ws2_32.lib")
@@ -32,10 +34,19 @@ int main()
         return 1;
     }
 
+    int modo_broadcast = 1;
+    if (setsockopt(client_socket, SOL_SOCKET, SO_BROADCAST, (char*)&modo_broadcast, sizeof(modo_broadcast)) == SOCKET_ERROR) 
+    {
+        printf("Erro ao ativar Broadcast: %d\n", WSAGetLastError());
+    }
+
     // configura o endereço de destino (onde o servidor está rodando)
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(SERVER_PORT);
-    server_addr.sin_addr.s_addr = inet_addr(SERVER_IP);
+    if(inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr) != 1)
+    {
+        printf("Endereço IP inválido.\n");
+    }
 
     // ativa o modo não-bloqueante no cliente também para a Raylib não travar
     unsigned long modo_nao_bloqueante = 1;
@@ -48,7 +59,9 @@ int main()
     SetTargetFPS(60);
 
     // VARIÁVEIS DE CONTROLE DE TELA
-    EstadoTela tela_atual = TELA_MENU;
+    // Mudança-Inicio: TELA_MENU_IP adicionada para gerenciar a seleção de IP/Broadcast antes dos botões de P1/P2
+    EstadoTela tela_atual = TELA_MENU_IP; 
+    // Mudança-Fim
     int meu_id = 0; 
 
     // VARIÁVEIS DO NETGRAPH (MÉTRICAS DE REDE)
@@ -56,9 +69,22 @@ int main()
     int pacotes_perdidos_total = 0;
     int primeiro_pacote = 1;
 
+    // Mudança-Inicio: Novas definições geométricas para a interface de seleção de conexão
+    Rectangle botao_lan = { (float)screenWidth / 2 - 190, 160, 180, 50 };
+    Rectangle botao_manual = { (float)screenWidth / 2 + 10, 160, 180, 50 };
+    Rectangle caixa_texto_ip = { (float)screenWidth / 2 - 150, 270, 300, 40 };
+    Rectangle botao_confirmar_ip = { (float)screenWidth / 2 - 80, 330, 160, 40 };
+    
+    char ip_digitado[16] = "127.0.0.1";
+    int qtd_letras_ip = 9;
+    bool digitando_ip = false;
+    bool buscando_lan = false;
+    float tempo_busca_lan = 0.0f;
+    // Mudança-Fim
+
     // definição geométrica dos botões de escolha no menu
-    Rectangle botao_p1 = { (float)screenWidth / 2 - 180, 180, 160, 60 };
-    Rectangle botao_p2 = { (float)screenWidth / 2 + 20, 180, 160, 60 };
+    Rectangle botao_p1 = { (float)screenWidth / 2 - 180, 220, 160, 60 };
+    Rectangle botao_p2 = { (float)screenWidth / 2 + 20, 220, 160, 60 };
 
     // variáveis locais para desenhar o jogo
     PacoteEstado estado_jogo = 
@@ -77,8 +103,110 @@ int main()
     // LOOP PRINCIPAL DO JOGO
     while (!WindowShouldClose()) 
     {
-        // LÓGICA DO MENU INICIAL
-        if (tela_atual == TELA_MENU)
+        // Mudança-Inicio: Adicionada a lógica completa da nova TELA_MENU_IP
+        if (tela_atual == TELA_MENU_IP)
+        {
+            Vector2 mouse_pos = GetMousePosition();
+
+            // AÇÃO: Clicou em Buscar na LAN (Broadcast)
+            if (!buscando_lan && CheckCollisionPointRec(mouse_pos, botao_lan) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+            {
+                buscando_lan = true;
+                tempo_busca_lan = (float)GetTime();
+
+                // Monta endereço universal de Broadcast
+                struct sockaddr_in addr_broadcast;
+                addr_broadcast.sin_family = AF_INET;
+                addr_broadcast.sin_port = htons(SERVER_PORT);
+                inet_pton(AF_INET, "255.255.255.255", &addr_broadcast.sin_addr);
+
+                // Envia sinalizador de descoberta
+                char sinal_busca[] = "PONG_DISCOVERY";
+                sendto(client_socket, sinal_busca, strlen(sinal_busca), 0, (struct sockaddr *)&addr_broadcast, sizeof(addr_broadcast));
+            }
+
+            // Se estiver buscando na LAN, tenta pescar a resposta do servidor
+            if (buscando_lan)
+            {
+                char buffer_resposta[32];
+                struct sockaddr_in de_onde_veio;
+                int de_onde_len = sizeof(de_onde_veio);
+
+                // Como o socket é não-bloqueante, inspeciona se há dados voltando
+                if (recvfrom(client_socket, buffer_resposta, sizeof(buffer_resposta) - 1, 0, (struct sockaddr *)&de_onde_veio, &de_onde_len) > 0)
+                {
+                    buffer_resposta[17] = '\0';
+                    if (strcmp(buffer_resposta, "PONG_SERVER_ALIVE") == 0)
+                    {
+                        // Mágica do Broadcast: Copia o endereço real do servidor descoberto
+                        server_addr = de_onde_veio;
+                        buscando_lan = false;
+                        tela_atual = TELA_MENU; // Avança para escolha de P1/P2
+                    }
+                }
+
+                // Timeout de busca (3 segundos)
+                if (GetTime() - tempo_busca_lan > 3.0f)
+                {
+                    buscando_lan = false;
+                }
+            }
+
+            // AÇÃO: Clique na Caixa de Texto para IP Manual
+            if (CheckCollisionPointRec(mouse_pos, caixa_texto_ip) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+            {
+                digitando_ip = true;
+            }
+            else if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+            {
+                digitando_ip = false;
+            }
+
+            // Captura entrada de caracteres da Raylib para o IP
+            if (digitando_ip)
+            {
+                SetMouseCursor(MOUSE_CURSOR_IBEAM);
+                int tecla = GetCharPressed();
+                while (tecla > 0)
+                {
+                    // Aceita apenas números e ponto
+                    if (((tecla >= '0' && tecla <= '9') || tecla == '.') && qtd_letras_ip < 15)
+                    {
+                        ip_digitado[qtd_letras_ip] = (char)tecla;
+                        qtd_letras_ip++;
+                        ip_digitado[qtd_letras_ip] = '\0';
+                    }
+                    tecla = GetCharPressed();
+                }
+
+                if (IsKeyPressed(KEY_BACKSPACE) && qtd_letras_ip > 0)
+                {
+                    qtd_letras_ip--;
+                    ip_digitado[qtd_letras_ip] = '\0';
+                }
+            }
+            else
+            {
+                SetMouseCursor(MOUSE_CURSOR_DEFAULT);
+            }
+
+            // AÇÃO: Confirmar IP Manualmente
+            if (CheckCollisionPointRec(mouse_pos, botao_confirmar_ip) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+            {
+                if (inet_pton(AF_INET, ip_digitado, &server_addr.sin_addr) == 1)
+                {
+                    tela_atual = TELA_MENU; // Avança para a escolha de slots
+                }
+                else
+                {
+                    printf("IP Digitado inválido!\n");
+                }
+            }
+        }
+        // Mudança-Fim
+        
+        // LÓGICA DO MENU INICIAL (Escolha de jogador)
+        else if (tela_atual == TELA_MENU) // Mudança-Inicio: Ajustado para rodar após a definição do IP // Mudança-Fim
         {
             Vector2 mouse_pos = GetMousePosition();
 
@@ -108,7 +236,7 @@ int main()
             int w_puro = IsKeyDown(KEY_W) || IsKeyDown(KEY_UP) ? 1 : 0;
             int s_puro = IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN) ? 1 : 0;
 
-            // criptografa os dados usando a chave secreta 0x5A (90 em decimal) antes de enviar
+            // ocultação dos dados usando a chave 0x5A (90 em decimal) antes de enviar
             meu_input.tecla_W = w_puro ^ 0x5A;
             meu_input.tecla_S = s_puro ^ 0x5A;
 
@@ -154,7 +282,33 @@ int main()
         BeginDrawing();
             ClearBackground(BLACK);
 
-            if (tela_atual == TELA_MENU)
+            // Mudança-Inicio: Renderização da nova TELA_MENU_IP
+            if (tela_atual == TELA_MENU_IP)
+            {
+                DrawText("CONEXÃO PONG MULTIPLAYER", screenWidth / 2 - MeasureText("CONEXÃO PONG MULTIPLAYER", 32) / 2, 40, 32, WHITE);
+                
+                // Botão LAN
+                DrawRectangleRec(botao_lan, CheckCollisionPointRec(GetMousePosition(), botao_lan) ? LIGHTGRAY : RAYWHITE);
+                DrawText(buscando_lan ? "BUSCANDO..." : "BUSCAR NA LAN", botao_lan.x + 15, botao_lan.y + 15, 18, BLACK);
+
+                DrawText("OR", screenWidth / 2 - MeasureText("OR", 20) / 2, 175, 20, GRAY);
+
+                // Entrada manual de IP
+                DrawRectangleRec(botao_manual, CheckCollisionPointRec(GetMousePosition(), botao_manual) ? LIGHTGRAY : RAYWHITE);
+                DrawText("DIGITAR IP", botao_manual.x + 40, botao_manual.y + 15, 18, BLACK);
+
+                // Caixa de texto do IP
+                DrawRectangleRec(caixa_texto_ip, LIGHTGRAY);
+                DrawRectangleLinesEx(caixa_texto_ip, 2.0f, digitando_ip ? RED : DARKGRAY);
+                DrawText(ip_digitado, caixa_texto_ip.x + 10, caixa_texto_ip.y + 10, 20, MAROON);
+                DrawText("Digite o IP acima se nao for jogar em LAN local", screenWidth / 2 - MeasureText("Digite o IP acima se nao for jogar em LAN local", 16) / 2, caixa_texto_ip.y - 25, 16, GRAY);
+
+                // Botão Confirmar
+                DrawRectangleRec(botao_confirmar_ip, CheckCollisionPointRec(GetMousePosition(), botao_confirmar_ip) ? GREEN : LIME);
+                DrawText("CONFIRMAR IP", botao_confirmar_ip.x + 12, botao_confirmar_ip.y + 10, 18, BLACK);
+            }
+            // Mudança-Fim
+            else if (tela_atual == TELA_MENU)
             {
                 DrawText("PONG MULTIPLAYER", screenWidth / 2 - MeasureText("PONG MULTIPLAYER", 40) / 2, 60, 40, WHITE);
                 DrawText("Escolha seu lado para conectar:", screenWidth / 2 - MeasureText("Escolha seu lado para conectar:", 20) / 2, 130, 20, GRAY);
